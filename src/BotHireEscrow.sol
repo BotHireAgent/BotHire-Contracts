@@ -7,45 +7,45 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /**
  * @title BotHireEscrow
- * @notice 最小信任 Escrow 合约 - USDC on Base
- * @dev 无 owner / 无 pause / 无手续费，24h deadline 链上强制执行
+ * @notice Minimal-trust escrow contract - USDC on Base
+ * @dev No owner / no pause / no fees; the 24h deadline is enforced on-chain
  */
 contract BotHireEscrow is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // ========== 状态 ==========
+    // ========== State ==========
 
     enum EscrowStatus {
-        Empty,     // 0 - 不存在
-        Deposited, // 1 - hirer 已存入
-        Released,  // 2 - 已释放给 provider
-        Refunded   // 3 - 已退回给 hirer
+        Empty,     // 0 - does not exist
+        Deposited, // 1 - hirer has deposited
+        Released,  // 2 - released to provider
+        Refunded   // 3 - refunded to hirer
     }
 
     struct Escrow {
         address hirer;
         address provider;
         uint256 amount;
-        uint256 deadline;     // deposit 时间 + 24h
+        uint256 deadline;     // deposit time + 24h
         EscrowStatus status;
     }
 
-    /// @notice USDC 代币合约 (immutable)
+    /// @notice USDC token contract (immutable)
     IERC20 public immutable usdc;
 
-    /// @notice 24 小时超时 (秒)
+    /// @notice 24-hour timeout (in seconds)
     uint256 public constant TIMEOUT = 24 hours;
 
     /// @notice escrowId => Escrow
     mapping(bytes32 => Escrow) public escrows;
 
-    // ========== 事件 ==========
+    // ========== Events ==========
 
     event Deposited(bytes32 indexed escrowId, address indexed hirer, address indexed provider, uint256 amount, uint256 deadline);
     event Released(bytes32 indexed escrowId, address indexed provider, uint256 amount);
     event Refunded(bytes32 indexed escrowId, address indexed hirer, uint256 amount);
 
-    // ========== 错误 ==========
+    // ========== Errors ==========
 
     error EscrowAlreadyExists();
     error EscrowNotFound();
@@ -55,23 +55,23 @@ contract BotHireEscrow is ReentrancyGuard {
     error ZeroAmount();
     error ZeroAddress();
 
-    // ========== 构造函数 ==========
+    // ========== Constructor ==========
 
     /**
-     * @param _usdc Base 链 USDC 地址: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+     * @param _usdc Base chain USDC address: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
      */
     constructor(address _usdc) {
         if (_usdc == address(0)) revert ZeroAddress();
         usdc = IERC20(_usdc);
     }
 
-    // ========== 外部方法 ==========
+    // ========== External methods ==========
 
     /**
-     * @notice Hirer 存入 USDC 到 escrow
-     * @param escrowId hireId 的 keccak256 哈希 (bytes32)
-     * @param provider Provider 钱包地址
-     * @param amount USDC 金额 (6 decimals)
+     * @notice Hirer deposits USDC into the escrow
+     * @param escrowId keccak256 hash of hireId (bytes32)
+     * @param provider Provider wallet address
+     * @param amount USDC amount (6 decimals)
      */
     function deposit(bytes32 escrowId, address provider, uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
@@ -92,8 +92,8 @@ contract BotHireEscrow is ReentrancyGuard {
     }
 
     /**
-     * @notice Hirer 释放资金给 provider (完成任务)
-     * @param escrowId Escrow 标识
+     * @notice Hirer releases the funds to the provider (task completed)
+     * @param escrowId Escrow identifier
      */
     function release(bytes32 escrowId) external nonReentrant {
         Escrow storage e = escrows[escrowId];
@@ -109,8 +109,8 @@ contract BotHireEscrow is ReentrancyGuard {
     }
 
     /**
-     * @notice Hirer 主动退款 (取消任务)
-     * @param escrowId Escrow 标识
+     * @notice Hirer voluntarily refunds (cancels the task)
+     * @param escrowId Escrow identifier
      */
     function refund(bytes32 escrowId) external nonReentrant {
         Escrow storage e = escrows[escrowId];
@@ -126,8 +126,8 @@ contract BotHireEscrow is ReentrancyGuard {
     }
 
     /**
-     * @notice 24h 超时后任何人可调用退款给 hirer
-     * @param escrowId Escrow 标识
+     * @notice After the 24h timeout, anyone can call this to refund the hirer
+     * @param escrowId Escrow identifier
      */
     function claimRefund(bytes32 escrowId) external nonReentrant {
         Escrow storage e = escrows[escrowId];
@@ -142,10 +142,10 @@ contract BotHireEscrow is ReentrancyGuard {
         emit Refunded(escrowId, e.hirer, e.amount);
     }
 
-    // ========== 查询方法 ==========
+    // ========== View methods ==========
 
     /**
-     * @notice 查询 escrow 状态
+     * @notice Query the escrow status
      */
     function getEscrow(bytes32 escrowId) external view returns (
         address hirer,

@@ -5,7 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {BotHireEscrow} from "../src/BotHireEscrow.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-/// @dev 测试用 Mock USDC
+/// @dev Mock USDC for testing
 contract MockUSDC is ERC20 {
     constructor() ERC20("USD Coin", "USDC") {}
 
@@ -33,15 +33,15 @@ contract BotHireEscrowTest is Test {
         usdc = new MockUSDC();
         escrow = new BotHireEscrow(address(usdc));
 
-        // 给 hirer 铸造 100 USDC
+        // Mint 100 USDC to hirer
         usdc.mint(hirer, 100_000_000);
 
-        // hirer 授权给合约
+        // hirer approves the contract
         vm.prank(hirer);
         usdc.approve(address(escrow), type(uint256).max);
     }
 
-    // ========== deposit 测试 ==========
+    // ========== deposit tests ==========
 
     function test_deposit() public {
         vm.prank(hirer);
@@ -54,7 +54,7 @@ contract BotHireEscrowTest is Test {
         assertGt(d, block.timestamp);
         assertEq(uint8(s), uint8(BotHireEscrow.EscrowStatus.Deposited));
 
-        // 合约持有 USDC
+        // The contract holds the USDC
         assertEq(usdc.balanceOf(address(escrow)), amount);
     }
 
@@ -79,7 +79,7 @@ contract BotHireEscrowTest is Test {
         escrow.deposit(escrowId, address(0), amount);
     }
 
-    // ========== release 测试 ==========
+    // ========== release tests ==========
 
     function test_release() public {
         vm.prank(hirer);
@@ -117,7 +117,7 @@ contract BotHireEscrowTest is Test {
         escrow.release(escrowId);
     }
 
-    // ========== refund 测试 ==========
+    // ========== refund tests ==========
 
     function test_refund() public {
         vm.prank(hirer);
@@ -143,18 +143,18 @@ contract BotHireEscrowTest is Test {
         escrow.refund(escrowId);
     }
 
-    // ========== claimRefund 测试 ==========
+    // ========== claimRefund tests ==========
 
     function test_claimRefund_afterDeadline() public {
         vm.prank(hirer);
         escrow.deposit(escrowId, provider, amount);
 
-        // 快进 24h + 1s
+        // Fast-forward 24h + 1s
         vm.warp(block.timestamp + 24 hours + 1);
 
         uint256 hirerBefore = usdc.balanceOf(hirer);
 
-        vm.prank(anyone); // 任何人可调用
+        vm.prank(anyone); // anyone can call
         escrow.claimRefund(escrowId);
 
         assertEq(usdc.balanceOf(hirer), hirerBefore + amount);
@@ -177,7 +177,7 @@ contract BotHireEscrowTest is Test {
         escrow.claimRefund(escrowId);
     }
 
-    // ========== getEscrow 测试 ==========
+    // ========== getEscrow tests ==========
 
     function test_getEscrow_empty() public view {
         (address h, , , , BotHireEscrow.EscrowStatus s) = escrow.getEscrow(keccak256("nonexistent"));
@@ -185,14 +185,14 @@ contract BotHireEscrowTest is Test {
         assertEq(uint8(s), uint8(BotHireEscrow.EscrowStatus.Empty));
     }
 
-    // ========== 构造函数测试 ==========
+    // ========== Constructor tests ==========
 
     function test_constructor_revert_zeroUsdc() public {
         vm.expectRevert(BotHireEscrow.ZeroAddress.selector);
         new BotHireEscrow(address(0));
     }
 
-    // ========== 集成流程测试 ==========
+    // ========== Integration flow tests ==========
 
     function test_fullFlow_depositAndRelease() public {
         // 1. deposit
@@ -203,7 +203,7 @@ contract BotHireEscrowTest is Test {
         vm.prank(hirer);
         escrow.release(escrowId);
 
-        // 验证最终状态
+        // Verify final state
         assertEq(usdc.balanceOf(provider), amount);
         assertEq(usdc.balanceOf(address(escrow)), 0);
     }
@@ -220,7 +220,7 @@ contract BotHireEscrowTest is Test {
         vm.prank(hirer);
         escrow.refund(escrowId);
 
-        // hirer 拿回全部
+        // hirer gets everything back
         assertEq(usdc.balanceOf(hirer), hirerInitial);
         assertEq(usdc.balanceOf(address(escrow)), 0);
     }
@@ -232,10 +232,10 @@ contract BotHireEscrowTest is Test {
         vm.prank(hirer);
         escrow.deposit(escrowId, provider, amount);
 
-        // 2. 等待超时
+        // 2. Wait for the timeout
         vm.warp(block.timestamp + 24 hours + 1);
 
-        // 3. 任何人 claimRefund
+        // 3. Anyone calls claimRefund
         vm.prank(anyone);
         escrow.claimRefund(escrowId);
 
