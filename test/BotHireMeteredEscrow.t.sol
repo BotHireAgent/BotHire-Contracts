@@ -503,4 +503,44 @@ contract BotHireMeteredEscrowTest is Test {
         vm.prank(arbiter);
         escrow.resolveDispute(escrowId, 2_000_000);
     }
+
+    function test_claimRefund_emitsRefunded() public {
+        _deposit();
+        vm.warp(block.timestamp + 24 hours + 1);
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit BotHireMeteredEscrow.Refunded(escrowId, hirer, maxAmount);
+        vm.prank(anyone);
+        escrow.claimRefund(escrowId);
+    }
+
+    function test_dispute_emitsDisputed() public {
+        _deposit();
+        vm.expectEmit(true, true, false, false, address(escrow));
+        emit BotHireMeteredEscrow.Disputed(escrowId, hirer);
+        vm.prank(hirer);
+        escrow.dispute(escrowId);
+    }
+
+    // ========== arbiter rotation is effective end-to-end ==========
+
+    function test_setArbiter_newArbiterResolves_oldCannot() public {
+        address newArbiter = makeAddr("newArbiter");
+        escrow.setArbiter(newArbiter);
+
+        _deposit();
+        vm.prank(hirer);
+        escrow.dispute(escrowId);
+
+        // old arbiter is now powerless
+        vm.prank(arbiter);
+        vm.expectRevert(BotHireMeteredEscrow.NotArbiter.selector);
+        escrow.resolveDispute(escrowId, 1_000_000);
+
+        // new arbiter can resolve
+        vm.prank(newArbiter);
+        escrow.resolveDispute(escrowId, 1_000_000);
+        assertEq(usdc.balanceOf(provider), 1_000_000);
+        (, , , , , BotHireMeteredEscrow.EscrowStatus s) = escrow.getEscrow(escrowId);
+        assertEq(uint8(s), uint8(BotHireMeteredEscrow.EscrowStatus.Settled));
+    }
 }
