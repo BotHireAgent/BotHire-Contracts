@@ -15,4 +15,4 @@ bsc = "${BSC_RPC_URL}"
 [etherscan]
 base = { key = "${BASESCAN_API_KEY}", url = "https://api.basescan.org/api" }
 base_sepolia = { key = "${BASESCAN_API_KEY}", url = "https://api-sepolia.basescan.org/api" }
-bsc = { key = "${BSCSCAN_API_KEY}", chain = 56, url = "https://api.bscscan.com/api" }
+bsc = { key = "${ETHERSCAN_API_KEY}", chain = 56 }

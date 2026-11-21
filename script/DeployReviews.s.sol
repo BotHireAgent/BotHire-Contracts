@@ -22,6 +22,8 @@ contract DeployReviews is Script {
     address constant METERED_USDC = 0x2800Eb74962ef0C243a7452613a3D922E5AEE48F;
     // Binance Agent ID (ERC-721, non-transferable)
     address constant AGENT_ID = 0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F;
+    // All four escrows hold 18-decimal tokens (BSC USDT / USDC): 1e18 = 1 USD minimum reviewable escrow.
+    uint256 constant MIN_ESCROW_AMOUNT = 1e18;
 
     function run() external returns (BotHireReviews reviews) {
         require(block.chainid == 56, "DeployReviews: BSC mainnet only");
@@ -33,7 +35,7 @@ contract DeployReviews is Script {
         escrows[3] = METERED_USDC;
 
         vm.startBroadcast();
-        reviews = new BotHireReviews(escrows, AGENT_ID);
+        reviews = new BotHireReviews(escrows, AGENT_ID, MIN_ESCROW_AMOUNT);
         vm.stopBroadcast();
 
         console.log("BotHireReviews deployed at:", address(reviews));

@@ -33,13 +33,25 @@ interface IBotHireEscrowView {
  *
  * Limits (stated plainly)
  * -----------------------
- *  - Sybil cost is low: the escrows charge no fee and accept any non-zero amount, so someone controlling two
- *    wallets can pay themselves (1 wei, released at once) and leave a review for the price of gas. Treat the
- *    raw count as weak evidence; weight by the Agent ID sub-stats (reviewer holds a Binance Agent ID, which
- *    is tied to a Binance account) and by the payout amounts in the escrows' events.
+ *  - Minimum escrow amount: only escrows of at least `minEscrowAmount` (token base units) can be reviewed.
+ *    A provider never consents to a fixed-price deposit, so without a floor anyone could "hire" a stranger
+ *    for 1 wei, release, and leave a permanent 1-star review; the floor makes every such review cost the
+ *    attacker that amount, paid to the victim. (Metered escrows report the budget here, not the payout, but
+ *    their completion is gated by BotHire's settler, which only settles hires a provider delivered on; a
+ *    metered escrow settled at 0 or ruled fully for the hirer can still be reviewed, and readers should
+ *    discount reviews whose escrow's Settled event paid the provider less than the floor.)
+ *  - Trust in the escrows: this contract has no owner, but it trusts the allowlisted escrows' status. Their
+ *    owner can rotate the arbiter / settler keys that complete escrows, so a compromised BotHire escrow
+ *    owner key could manufacture completed escrows (and therefore review slots); it still cannot move funds
+ *    to anyone but the recorded hirer and provider.
+ *  - Sybil cost: someone controlling two wallets can still pay themselves (at least the floor, and gas) and
+ *    review. Treat the raw count as weak evidence; weight by the Agent ID sub-stats (the reviewer holds a
+ *    soulbound Binance Agent ID, tied to a Binance account) and by `escrowAmount` in the event.
+ *  - Stats are kept per role: reviews a subject received as provider (from its hirers) and as hirer (from
+ *    its providers), so a seller's reputation isn't mixed with how it behaved as a buyer.
  *  - Comments are emitted in the event only (not stored) to keep storage to one slot per subject.
  *
- * Storage: one packed slot per subject (4 × uint64) + one slot per escrow (2-bit reviewed mask).
+ * Storage: one packed slot per subject per role (4 × uint64) + one slot per escrow (2-bit reviewed mask).
  */
 contract BotHireReviews {
     // ========== Constants ==========
@@ -56,6 +68,9 @@ contract BotHireReviews {
     uint8 internal constant REVIEWED_BY_HIRER = 1;
     uint8 internal constant REVIEWED_BY_PROVIDER = 2;
 
+    uint256 internal constant ROLE_AS_PROVIDER = 0; // reviewed by its hirer
+    uint256 internal constant ROLE_AS_HIRER = 1; // reviewed by its provider
+
     // ========== Types ==========
 
     struct Stats {
@@ -70,12 +85,16 @@ contract BotHireReviews {
     /// @notice Binance Agent ID ERC-721 (zero = Agent ID flagging disabled).
     address public immutable agentId;
 
+    /// @notice Smallest escrow amount (token base units) that can be reviewed; see "Minimum escrow amount".
+    uint256 public immutable minEscrowAmount;
+
     address[] internal _escrows;
     mapping(address => bool) public isEscrow;
 
     // ========== State ==========
 
-    mapping(address => Stats) internal _stats;
+    /// @dev subject => role (ROLE_AS_PROVIDER / ROLE_AS_HIRER) => stats received in that role.
+    mapping(address => Stats[2]) internal _stats;
     /// @dev escrow => escrowId => bitmask (bit0 = hirer reviewed, bit1 = provider reviewed).
     mapping(address => mapping(bytes32 => uint8)) internal _reviewed;
 
@@ -86,6 +105,7 @@ contract BotHireReviews {
         address indexed reviewer,
         address indexed escrow,
         bytes32 escrowId,
+        uint256 escrowAmount,
         uint8 rating,
         bool reviewerIsHirer,
         bool reviewerHasAgentId,
@@ -106,14 +126,17 @@ contract BotHireReviews {
     error SelfDealing();
     error NotParty();
     error AlreadyReviewed();
+    error AmountBelowMinimum();
 
     // ========== Constructor ==========
 
     /**
      * @param escrows  Fixed allowlist of BotHire escrow contracts (1..MAX_ESCROWS, non-zero, deployed, unique).
      * @param agentId_ Binance Agent ID ERC-721, or address(0) to disable Agent ID flagging.
+     * @param minEscrowAmount_ Smallest reviewable escrow amount in token base units (all allowlisted escrows
+     *        must use tokens with the same decimals for this to mean the same value).
      */
-    constructor(address[] memory escrows, address agentId_) {
+    constructor(address[] memory escrows, address agentId_, uint256 minEscrowAmount_) {
         uint256 n = escrows.length;
         if (n == 0) revert NoEscrows();
         if (n > MAX_ESCROWS) revert TooManyEscrows();
@@ -127,6 +150,7 @@ contract BotHireReviews {
         }
         if (agentId_ != address(0) && agentId_.code.length == 0) revert NotContract();
         agentId = agentId_;
+        minEscrowAmount = minEscrowAmount_;
     }
 
     // ========== Review ==========
@@ -143,10 +167,10 @@ contract BotHireReviews {
         if (rating < MIN_RATING || rating > MAX_RATING) revert InvalidRating();
         if (bytes(comment).length > MAX_COMMENT_BYTES) revert CommentTooLong();
 
-        (address subject, bool byHirer) = _claimSide(escrow, escrowId);
+        (address subject, bool byHirer, uint256 amount) = _claimSide(escrow, escrowId);
         bool hasAgentId = _holdsAgentId(msg.sender);
 
-        Stats storage s = _stats[subject];
+        Stats storage s = _stats[subject][byHirer ? ROLE_AS_PROVIDER : ROLE_AS_HIRER];
         // Overflow impossible in practice (would need 2^64 reviews / 2^64 / 5 ratings).
         unchecked {
             s.count += 1;
@@ -157,18 +181,31 @@ contract BotHireReviews {
             }
         }
 
-        emit Reviewed(subject, msg.sender, escrow, escrowId, rating, byHirer, hasAgentId, comment);
+        emit Reviewed(subject, msg.sender, escrow, escrowId, amount, rating, byHirer, hasAgentId, comment);
     }
 
     // ========== Views ==========
 
-    /// @notice Aggregate reputation of `subject`. Average = ratingSum / count.
+    /// @notice Reputation of `subject` across both roles. Average = ratingSum / count.
     function stats(address subject)
         external
         view
         returns (uint64 count, uint64 ratingSum, uint64 agentIdCount, uint64 agentIdRatingSum)
     {
-        Stats memory s = _stats[subject];
+        Stats memory p = _stats[subject][ROLE_AS_PROVIDER];
+        Stats memory h = _stats[subject][ROLE_AS_HIRER];
+        unchecked {
+            return (p.count + h.count, p.ratingSum + h.ratingSum, p.agentIdCount + h.agentIdCount, p.agentIdRatingSum + h.agentIdRatingSum);
+        }
+    }
+
+    /// @notice Reputation of `subject` in one role: as provider (reviews from its hirers) or as hirer.
+    function statsByRole(address subject, bool asProvider)
+        external
+        view
+        returns (uint64 count, uint64 ratingSum, uint64 agentIdCount, uint64 agentIdRatingSum)
+    {
+        Stats memory s = _stats[subject][asProvider ? ROLE_AS_PROVIDER : ROLE_AS_HIRER];
         return (s.count, s.ratingSum, s.agentIdCount, s.agentIdRatingSum);
     }
 
@@ -188,10 +225,17 @@ contract BotHireReviews {
      * @dev Verifies the escrow is completed and msg.sender is one of its two distinct parties, then marks
      *      that side as reviewed (reverting if it already was). Returns the counterparty being reviewed.
      */
-    function _claimSide(address escrow, bytes32 escrowId) internal returns (address subject, bool byHirer) {
-        (address hirer, address provider,,,, uint8 status) = IBotHireEscrowView(escrow).getEscrow(escrowId);
+    function _claimSide(address escrow, bytes32 escrowId)
+        internal
+        returns (address subject, bool byHirer, uint256 amount)
+    {
+        address hirer;
+        address provider;
+        uint8 status;
+        (hirer, provider, amount,,, status) = IBotHireEscrowView(escrow).getEscrow(escrowId);
         if (status != STATUS_COMPLETED) revert EscrowNotCompleted();
         if (hirer == provider) revert SelfDealing();
+        if (amount < minEscrowAmount) revert AmountBelowMinimum();
 
         uint8 bit;
         if (msg.sender == hirer) {

@@ -55,6 +55,7 @@ contract BotHireReviewsTest is Test {
         address indexed reviewer,
         address indexed escrow,
         bytes32 escrowId,
+        uint256 escrowAmount,
         uint8 rating,
         bool reviewerIsHirer,
         bool reviewerHasAgentId,
@@ -86,7 +87,7 @@ contract BotHireReviewsTest is Test {
         address[] memory list = new address[](2);
         list[0] = address(fixedEscrow);
         list[1] = address(metered);
-        return new BotHireReviews(list, agentId);
+        return new BotHireReviews(list, agentId, 0);
     }
 
     function _fixedDeposit(bytes32 ref) internal returns (bytes32 id) {
@@ -139,7 +140,7 @@ contract BotHireReviewsTest is Test {
         address[] memory l = new address[](2);
         l[0] = address(fixedEscrow);
         vm.expectRevert(BotHireReviews.ZeroAddress.selector);
-        new BotHireReviews(l, address(0));
+        new BotHireReviews(l, address(0), 0);
     }
 
     function test_constructor_revert_duplicate() public {
@@ -147,32 +148,32 @@ contract BotHireReviewsTest is Test {
         l[0] = address(fixedEscrow);
         l[1] = address(fixedEscrow);
         vm.expectRevert(BotHireReviews.DuplicateEscrow.selector);
-        new BotHireReviews(l, address(0));
+        new BotHireReviews(l, address(0), 0);
     }
 
     function test_constructor_revert_empty() public {
         vm.expectRevert(BotHireReviews.NoEscrows.selector);
-        new BotHireReviews(new address[](0), address(0));
+        new BotHireReviews(new address[](0), address(0), 0);
     }
 
     function test_constructor_revert_tooMany() public {
         address[] memory l = new address[](17);
         vm.expectRevert(BotHireReviews.TooManyEscrows.selector);
-        new BotHireReviews(l, address(0));
+        new BotHireReviews(l, address(0), 0);
     }
 
     function test_constructor_revert_eoaEscrow() public {
         address[] memory l = new address[](1);
         l[0] = stranger;
         vm.expectRevert(BotHireReviews.NotContract.selector);
-        new BotHireReviews(l, address(0));
+        new BotHireReviews(l, address(0), 0);
     }
 
     function test_constructor_revert_eoaAgentId() public {
         address[] memory l = new address[](1);
         l[0] = address(fixedEscrow);
         vm.expectRevert(BotHireReviews.NotContract.selector);
-        new BotHireReviews(l, stranger);
+        new BotHireReviews(l, stranger, 0);
     }
 
     function test_constructor_zeroAgentIdAllowed() public {
@@ -193,11 +194,11 @@ contract BotHireReviewsTest is Test {
         bytes32 id = _fixedReleased("r1");
 
         vm.expectEmit(true, true, true, true, address(reviews));
-        emit Reviewed(provider, hirer, address(fixedEscrow), id, 5, true, false, "great work");
+        emit Reviewed(provider, hirer, address(fixedEscrow), id, AMT, 5, true, false, "great work");
         _review(hirer, address(fixedEscrow), id, 5, "great work");
 
         vm.expectEmit(true, true, true, true, address(reviews));
-        emit Reviewed(hirer, provider, address(fixedEscrow), id, 4, false, false, "paid fast");
+        emit Reviewed(hirer, provider, address(fixedEscrow), id, AMT, 4, false, false, "paid fast");
         _review(provider, address(fixedEscrow), id, 4, "paid fast");
 
         _assertStats(provider, 1, 5, 0, 0);
@@ -250,7 +251,7 @@ contract BotHireReviewsTest is Test {
         address[] memory l = new address[](2);
         l[0] = address(v3);
         l[1] = address(mv2);
-        BotHireReviews r = new BotHireReviews(l, address(0));
+        BotHireReviews r = new BotHireReviews(l, address(0), 0);
 
         vm.startPrank(hirer);
         token.approve(address(v3), type(uint256).max);
@@ -418,7 +419,7 @@ contract BotHireReviewsTest is Test {
         agent.set(hirer, 1);
         bytes32 id = _fixedReleased("a1");
         vm.expectEmit(true, true, true, true, address(reviews));
-        emit Reviewed(provider, hirer, address(fixedEscrow), id, 4, true, true, "");
+        emit Reviewed(provider, hirer, address(fixedEscrow), id, AMT, 4, true, true, "");
         _review(hirer, address(fixedEscrow), id, 4, "");
         _assertStats(provider, 1, 4, 1, 4);
     }
@@ -445,7 +446,7 @@ contract BotHireReviewsTest is Test {
         BotHireReviews r = _deploy(address(new RevertingAgentId()));
         bytes32 id = _fixedReleased("a4");
         vm.expectEmit(true, true, true, true, address(r));
-        emit Reviewed(provider, hirer, address(fixedEscrow), id, 5, true, false, "");
+        emit Reviewed(provider, hirer, address(fixedEscrow), id, AMT, 5, true, false, "");
         vm.prank(hirer);
         r.review(address(fixedEscrow), id, 5, "");
     }
@@ -510,5 +511,79 @@ contract BotHireReviewsTest is Test {
         bytes32 id = _fixedReleased("fzc");
         if (len > 280) vm.expectRevert(BotHireReviews.CommentTooLong.selector);
         _review(hirer, address(fixedEscrow), id, 3, string(new bytes(len)));
+    }
+
+    // ---------- v2: minimum amount, role split, amount in event ----------
+
+    function _deployMin(uint256 minAmt) internal returns (BotHireReviews) {
+        address[] memory list = new address[](2);
+        list[0] = address(fixedEscrow);
+        list[1] = address(metered);
+        return new BotHireReviews(list, address(agent), minAmt);
+    }
+
+    function test_minAmount_dustReverts() public {
+        BotHireReviews r = _deployMin(1e18);
+        vm.prank(hirer);
+        fixedEscrow.deposit("dust", provider, 1);
+        bytes32 id = fixedEscrow.computeEscrowId(hirer, "dust");
+        vm.prank(hirer);
+        fixedEscrow.release(id);
+        vm.prank(hirer);
+        vm.expectRevert(BotHireReviews.AmountBelowMinimum.selector);
+        r.review(address(fixedEscrow), id, 1, "smear");
+    }
+
+    function test_minAmount_exactlyMinOk() public {
+        BotHireReviews r = _deployMin(AMT);
+        bytes32 id = _fixedReleased("min");
+        vm.prank(hirer);
+        r.review(address(fixedEscrow), id, 3, "");
+        (uint64 c,,,) = r.stats(provider);
+        assertEq(c, 1);
+        assertEq(r.minEscrowAmount(), AMT);
+    }
+
+    function test_minAmount_belowMinByOne() public {
+        BotHireReviews r = _deployMin(AMT + 1);
+        bytes32 id = _fixedReleased("min1");
+        vm.prank(provider);
+        vm.expectRevert(BotHireReviews.AmountBelowMinimum.selector);
+        r.review(address(fixedEscrow), id, 3, "");
+    }
+
+    function test_statsByRole_split() public {
+        bytes32 id = _fixedReleased("role");
+        _review(hirer, address(fixedEscrow), id, 5, "");   // provider reviewed as provider
+        _review(provider, address(fixedEscrow), id, 2, ""); // hirer reviewed as hirer
+        (uint64 pc, uint64 ps,,) = reviews.statsByRole(provider, true);
+        (uint64 hc,,,) = reviews.statsByRole(provider, false);
+        assertEq(pc, 1); assertEq(ps, 5); assertEq(hc, 0);
+        (uint64 hc2, uint64 hs2,,) = reviews.statsByRole(hirer, false);
+        (uint64 pc2,,,) = reviews.statsByRole(hirer, true);
+        assertEq(hc2, 1); assertEq(hs2, 2); assertEq(pc2, 0);
+    }
+
+    function test_stats_sumsBothRoles() public {
+        // provider is reviewed as provider on one escrow and as hirer on another
+        bytes32 a = _fixedReleased("sum-a");
+        _review(hirer, address(fixedEscrow), a, 4, "");
+        vm.prank(provider);
+        fixedEscrow.deposit("sum-b", hirer, AMT);
+        bytes32 b = fixedEscrow.computeEscrowId(provider, "sum-b");
+        vm.prank(provider);
+        fixedEscrow.release(b);
+        _review(hirer, address(fixedEscrow), b, 2, ""); // hirer is now the provider of b, reviews provider-as-hirer
+        _assertStats(provider, 2, 6, 0, 0);
+        (uint64 pc,,,) = reviews.statsByRole(provider, true);
+        (uint64 hc,,,) = reviews.statsByRole(provider, false);
+        assertEq(pc, 1); assertEq(hc, 1);
+    }
+
+    function test_event_meteredAmountIsBudget() public {
+        bytes32 id = _meteredSettled("evm");
+        vm.expectEmit(true, true, true, true, address(reviews));
+        emit Reviewed(provider, hirer, address(metered), id, AMT, 5, true, false, "");
+        _review(hirer, address(metered), id, 5, "");
     }
 }
