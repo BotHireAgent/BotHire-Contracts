@@ -1,0 +1,6 @@
+# Foundry build output and local caches (cache/ can hold "sensitive values" from broadcasts)
+out/
+cache/
+broadcast/**/dry-run/
+.env
+.env.*
