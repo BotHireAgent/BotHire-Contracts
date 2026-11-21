@@ -11,8 +11,10 @@ evm_version = "cancun"
 base = "${BASE_RPC_URL}"
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
 bsc = "${BSC_RPC_URL}"
+celo = "https://forno.celo.org"
 
 [etherscan]
 base = { key = "${BASESCAN_API_KEY}", url = "https://api.basescan.org/api" }
 base_sepolia = { key = "${BASESCAN_API_KEY}", url = "https://api-sepolia.basescan.org/api" }
 bsc = { key = "${ETHERSCAN_API_KEY}", chain = 56 }
+celo = { key = "${ETHERSCAN_API_KEY}", chain = 42220 }
