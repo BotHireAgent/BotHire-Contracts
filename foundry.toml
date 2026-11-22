@@ -12,6 +12,7 @@ base = "${BASE_RPC_URL}"
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
 bsc = "${BSC_RPC_URL}"
 celo = "https://forno.celo.org"
+arc = "https://rpc.mainnet.arc.io"
 
 [etherscan]
 base = { key = "${BASESCAN_API_KEY}", url = "https://api.basescan.org/api" }
